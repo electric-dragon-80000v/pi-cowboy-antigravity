@@ -1,0 +1,23 @@
+{
+  "name": "pi-cowboy-antigravity",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Antigravity CLI harness plugin for pi-cowboy",
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "plugin.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi-cowboy": {
+    "plugin": "./plugin.js"
+  },
+  "scripts": {
+    "test": "node --test index.test.js",
+    "syntax:check": "node --check index.js && node --check plugin.js && node --check index.test.js",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "dev:install": "pi install ."
+  }
+}
