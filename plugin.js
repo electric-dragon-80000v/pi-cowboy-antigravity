@@ -582,11 +582,11 @@ function removeStaged(subagentId, stagingDir) {
 
 export default function register(api) {
   /**
-   * What each spawn staged, keyed by spawn id. Teardown and the handover reader
-   * both need a path the request does not carry, and a run that never prepared
-   * (or one recovered after a reload) leaves nothing here to remove.
+   * The directory each spawn staged into, keyed by spawn id: teardown names a
+   * path its request does not carry, and a run that never prepared (or one
+   * recovered after a reload) leaves nothing here to remove.
    */
-  const staged = new Map();
+  const stagedDirs = new Map();
 
   /** The CLI's own version, read once: it cannot change under a live session. */
   let version;
@@ -634,11 +634,7 @@ export default function register(api) {
         { mode: 0o600 },
       );
       writeFileSync(settingsFileOf(launch), settingsBody(cwd), { mode: 0o600 });
-      staged.set(launch.subagentId, {
-        stagingDir: stagingDirectoryOf(launch),
-        taskFile: launch.taskFile,
-        cwd,
-      });
+      stagedDirs.set(launch.subagentId, stagingDirectoryOf(launch));
 
       await pane.run(paneId, stagedProof(launch));
       try {
@@ -727,27 +723,23 @@ export default function register(api) {
     /**
      * The conversation's records, read from the store the CLI writes. The run
      * is the one this spawn's own definition and task path answer to (see
-     * findRunConversation); the reader is given the task file when this process
-     * still holds the spawn, and falls back to the spawn id the path carries.
+     * findRunConversation); the task file comes from the request, so the read
+     * does not depend on this process having launched the spawn.
      */
-    readHandoverRecords: async ({ subagentId, cwd }) => {
-      const run = staged.get(subagentId);
+    readHandoverRecords: async ({ subagentId, staged }) => {
       const conversation = findRunConversation({
         subagentId,
-        taskFile:
-          run !== undefined && canonicalPath(run.cwd) === canonicalPath(cwd)
-            ? run.taskFile
-            : undefined,
+        taskFile: staged.taskFile,
       });
       return sessionSource(conversation);
     },
     /** Remove the staged definition and trust override; the tree is pi-cowboy's. */
     teardown: async ({ subagentId }) => {
-      const run = staged.get(subagentId);
-      staged.delete(subagentId);
+      const stagingDir = stagedDirs.get(subagentId);
+      stagedDirs.delete(subagentId);
       removeStaged(
         subagentId,
-        run === undefined ? stagingDirectoryFor(subagentId) : run.stagingDir,
+        stagingDir === undefined ? stagingDirectoryFor(subagentId) : stagingDir,
       );
     },
     /**

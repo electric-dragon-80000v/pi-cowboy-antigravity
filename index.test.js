@@ -700,6 +700,8 @@ test("readHandoverRecords reads the conversation this spawn opened", async () =>
       subagentId: staged.subagentId,
       paneId: "wSW:p1",
       cwd: root,
+      startedAt: Date.now(),
+      staged,
     });
     assert.equal(source.sessionId, "conversation-fixture");
     assert.deepEqual(
