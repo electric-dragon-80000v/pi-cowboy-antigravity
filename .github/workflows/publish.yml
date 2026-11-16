@@ -52,10 +52,11 @@ jobs:
           # the last release, so the tags and the history behind them are
           # needed; a shallow clone has neither.
           fetch-depth: 0
-          # The git push that semantic-release does must authenticate as the
-          # account that has bypass on the main ruleset, not the default
-          # GITHUB_TOKEN (which is not in the ruleset's bypass list).
-          token: ${{ secrets.RELEASE_TOKEN }}
+          # No `token` override: the default GITHUB_TOKEN is what pushes the
+          # release commit and tag, and this repository has no ruleset for it to
+          # bypass. A personal access token would only be needed if a branch
+          # rule here started blocking the token's pushes (`[skip ci]` in the
+          # release commit keeps that push from starting another CI run).
 
       # No cache of any kind: this job's build is what reaches the registry, and
       # a restored cache is one more input to it that nobody reviewed.
@@ -120,4 +121,6 @@ jobs:
       - name: Release
         run: HUSKY=0 pnpm run release
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          # The same token the checkout holds: `contents: write` above is what
+          # lets it push the commit and tag and open the GitHub release.
+          GITHUB_TOKEN: ${{ github.token }}
