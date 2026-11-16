@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Format, Syntax & Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The commit-message check below diffs against the base branch, so the
+          # branch it diffs from has to be in the local history.
+          fetch-depth: 0
+
+      - name: Set up pnpm and Node.js 24.20.0
+        uses: pnpm/setup@v3
+        with:
+          runtime: node@24.20.0
+          cache: true # the pnpm store, keyed on pnpm-lock.yaml's content hash
+          # pnpm and Node only; installing is the explicit step below.
+          install: false
+
+      - name: Install dependencies
+        run: HUSKY=0 pnpm install --frozen-lockfile
+
+      # The commit-msg hook only guards commits made where husky is installed,
+      # and `git commit --no-verify` bypasses it. This checks the range a pull
+      # request would merge, so no message reaches `main` that the release
+      # workflow cannot turn into a version.
+      #
+      # The flags are passed without a `--` separator: pnpm forwards that
+      # separator to the script verbatim (npm stripped it), and commitlint reads
+      # it as end-of-options, which turns `--from`/`--to` into positionals it
+      # ignores. The whole history is then linted from the first commit, and
+      # `init` fails it.
+      - name: Check commit messages
+        if: github.event_name == 'pull_request'
+        run: pnpm run commitlint --from "origin/${{ github.event.pull_request.base.ref }}" --to HEAD
+
+      - name: Check formatting
+        run: pnpm run format:check
+
+      - name: Check syntax
+        run: pnpm run syntax:check
+
+      # The published artifact is what users load, and the manifest points
+      # pi-cowboy at `plugin.js`; pi drops a manifest entry whose file is
+      # missing instead of failing, so a tarball without it ships as a plugin
+      # that never loads. Assert the tarball itself, including the assets the
+      # runtime reads from the package root by path. Read the tarball rather
+      # than the packing command's stdout: lifecycle scripts write there too,
+      # and would corrupt the pipe.
+      - name: Verify the packed tarball
+        env:
+          HUSKY: 0
+        run: |
+          pnpm pack --pack-destination "$RUNNER_TEMP" > /dev/null
+          tarball="$(ls "$RUNNER_TEMP"/pi-cowboy-antigravity-*.tgz)"
+          entries="$(tar -tzf "$tarball" | sed 's|^package/||')"
+          for required in \
+            package.json \
+            index.js \
+            plugin.js \
+            README.md \
+            LICENSE; do
+            printf '%s\n' "$entries" | grep -qxF "$required" || {
+              echo "tarball is missing $required"
+              exit 1
+            }
+          done
+          # `files` in package.json is the only thing shaping the tarball, so a
+          # pattern that silently stopped matching is the failure this guards
+          # against: the test suite stays source-side and must not ship.
+          for forbidden in \
+            '^index\.test\.js$' \
+            '^node_modules/'; do
+            if printf '%s\n' "$entries" | grep -qE "$forbidden"; then
+              echo "tarball should not contain: $(printf '%s\n' "$entries" | grep -E "$forbidden" | head -1)"
+              exit 1
+            fi
+          done
+          echo "tarball ok: $(printf '%s\n' "$entries" | wc -l) entries"
+
+      - name: Run unit tests
+        run: pnpm test

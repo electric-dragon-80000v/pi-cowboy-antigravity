@@ -166,7 +166,34 @@ so nothing it could parse would change how the CLI launches.
 ## Development
 
 ```bash
+pnpm install
 pnpm test          # node --test
 pnpm run syntax:check
 pnpm run format:check
 ```
+
+## Releasing
+
+Versions are cut by [semantic-release](https://semantic-release.gitbook.io/)
+from Conventional Commits on `main`. The `commit-msg` hook runs commitlint, so a
+message the release cannot parse never gets recorded, and a `feat:` or `fix:` on
+`main` is enough to release — there is no version to edit by hand.
+
+`.github/workflows/publish.yml` runs after CI accepts a push to `main`, and then
+semantic-release bumps `package.json`, writes `CHANGELOG.md`, commits the
+release, pushes its tag, opens the GitHub release and **stages** the version on
+npm. Staging is not publishing: a maintainer approves the staged version with
+2FA — `pnpm run release:approve` (`npm stage approve`) or the Staged Packages
+tab on npmjs.com — so a version never reaches installers on its own.
+
+```bash
+pnpm run release        # cut a release locally (needs push access and a token)
+pnpm run release:stage  # re-stage the current version from a tag's checkout
+pnpm run release:approve
+```
+
+Staging uses npm's trusted publishing through GitHub OIDC, so no `NPM_TOKEN` is
+stored. Two things have to exist outside the repository: a trusted publisher for
+`pi-cowboy-antigravity` on npmjs.com configured against `publish.yml` (no
+environment), and a `RELEASE_TOKEN` secret for the account that may push to
+`main` past its ruleset.
