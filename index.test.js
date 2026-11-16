@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
   existsSync,
@@ -14,6 +16,7 @@ import test from "node:test";
 import register, {
   agentDefinition,
   agentFileOf,
+  availabilityOf,
   brainRoot,
   canonicalPath,
   defaultTools,
@@ -426,11 +429,27 @@ test("the harness registers its identity and multiplexer kind", () => {
   assert.equal(typeof harness.postStart, "function");
   assert.equal(typeof harness.steer, "function");
   assert.equal(typeof harness.readHandoverRecords, "function");
+  assert.equal(typeof harness.availability, "function");
 });
 
 test("availability follows agy on PATH", () => {
-  const { harness } = harnessFrom();
-  assert.equal(harness.availability().status, "available");
+  const bin = mkdtempSync(join(tmpdir(), "agy-bin-"));
+  const empty = join(bin, "empty");
+  mkdirSync(empty);
+
+  // Each answer is proved against a `PATH` this test owns rather than the one
+  // the machine happens to have: a CI runner has no `agy` installed, and the
+  // developer's own `PATH` should not decide what this test asserts.
+  const missing = availabilityOf({ PATH: empty });
+  assert.equal(missing.status, "unavailable");
+  assert.match(missing.notice, /agy on PATH/);
+
+  // A zero-byte file is all `onPath` looks for: an executable entry. Windows
+  // has no execute bit, so the mode is a no-op the test does not depend on.
+  const agy = join(bin, "agy");
+  writeFileSync(agy, "");
+  chmodSync(agy, 0o755);
+  assert.deepEqual(availabilityOf({ PATH: bin }), { status: "available" });
 });
 
 test("prepare stages the definition and the trust override", async () => {
@@ -622,37 +641,44 @@ test("teardown removes what prepare staged, and is safe when it staged nothing",
   });
 });
 
-test("teardown finds the staging of a run this process never prepared", async () => {
+test("teardown finds the staging of a run this process never prepared", async (t) => {
+  const { harness } = harnessFrom();
+  // The staging path is derived from the temporary directory, so the fixture
+  // moves the process's `TMPDIR` into a directory of its own: the tree then
+  // never touches the root real spawns use. Restoring it deletes the variable
+  // when the runner had none — assigning `undefined` back would set it to the
+  // literal string "undefined", which every later `os.tmpdir()` call reads.
   const home = mkdtempSync(join(tmpdir(), "agy-tmp-"));
-  const previous = process.env.TMPDIR;
+  const previousTmp = process.env.TMPDIR;
   process.env.TMPDIR = home;
-  try {
-    const { harness } = harnessFrom();
-    const stagingDir = stagingDirectoryFor("abc12345");
-    assert.equal(stagingDir, join(home, "pi-cowboy", "abc12345"));
+  t.after(() => {
+    if (previousTmp === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmp;
+    rmSync(home, { recursive: true, force: true });
+  });
 
-    const definition = join(
-      stagingDir,
-      ".agents",
-      "agents",
-      "pi-cowboy-abc12345.md",
-    );
-    mkdirSync(join(definition, ".."), { recursive: true });
-    writeFileSync(definition, "staged by an earlier process\n");
-    writeFileSync(join(stagingDir, "agy-settings.json"), "{}\n");
+  const stagingDir = stagingDirectoryFor("abc12345");
+  assert.equal(stagingDir, join(home, "pi-cowboy", "abc12345"));
 
-    await harness.teardown({
-      subagentId: "abc12345",
-      paneId: null,
-      cwd: null,
-      pi: {},
-    });
-    assert.equal(existsSync(definition), false);
-    assert.equal(existsSync(join(stagingDir, ".agents")), false);
-    assert.equal(existsSync(join(stagingDir, "agy-settings.json")), false);
-  } finally {
-    process.env.TMPDIR = previous;
-  }
+  const definition = join(
+    stagingDir,
+    ".agents",
+    "agents",
+    "pi-cowboy-abc12345.md",
+  );
+  mkdirSync(join(definition, ".."), { recursive: true });
+  writeFileSync(definition, "staged by an earlier process\n");
+  writeFileSync(join(stagingDir, "agy-settings.json"), "{}\n");
+
+  await harness.teardown({
+    subagentId: "abc12345",
+    paneId: null,
+    cwd: null,
+    pi: {},
+  });
+  assert.equal(existsSync(definition), false);
+  assert.equal(existsSync(join(stagingDir, ".agents")), false);
+  assert.equal(existsSync(join(stagingDir, "agy-settings.json")), false);
 });
 
 test("teardown keeps the directories pi-cowboy still uses", async () => {
@@ -674,49 +700,56 @@ test("teardown keeps the directories pi-cowboy still uses", async () => {
   assert.equal(existsSync(join(root, "abc12345", ".agents")), false);
 });
 
-test("readHandoverRecords reads the conversation this spawn opened", async () => {
+test("readHandoverRecords reads the conversation this spawn opened", async (t) => {
   const { harness } = harnessFrom();
   const { launch: staged, root } = stagedLaunch();
-  // The store lives under HOME, which this test moves to its own fixture home.
+  // The store's location is `HOME`'s, so reading one end to end means pointing
+  // `HOME` at a fixture. Nothing in the request can redirect it, and writing
+  // into the developer's real conversation store is not an option. The restore
+  // deletes the variable when the runner had none, rather than setting it to
+  // the string "undefined".
   const home = mkdtempSync(join(tmpdir(), "agy-home-"));
-  const previous = process.env.HOME;
+  const previousHome = process.env.HOME;
   process.env.HOME = home;
-  try {
-    await harness.prepare({
-      pane: silentPane(),
-      paneId: "wSW:p1",
-      cwd: root,
-      launch: staged,
-    });
+  t.after(() => {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    rmSync(home, { recursive: true, force: true });
+  });
 
-    const file = transcriptPath(join(brainRoot(), "conversation-fixture"));
-    mkdirSync(join(file, ".."), { recursive: true });
-    writeFileSync(
-      file,
-      `${JSON.stringify({ type: "USER_INPUT", content: `<USER_REQUEST>Read the task in ${staged.taskFile}</USER_REQUEST>` })}\n`,
-    );
+  await harness.prepare({
+    pane: silentPane(),
+    paneId: "wSW:p1",
+    cwd: root,
+    launch: staged,
+  });
 
-    const source = await harness.readHandoverRecords({
-      subagentId: staged.subagentId,
-      paneId: "wSW:p1",
-      cwd: root,
-      startedAt: Date.now(),
-      staged,
-    });
-    assert.equal(source.sessionId, "conversation-fixture");
-    assert.deepEqual(
-      [...source.records].map((record) => record.kind),
-      ["user"],
-    );
-  } finally {
-    process.env.HOME = previous;
-    await harness.teardown({
-      subagentId: staged.subagentId,
-      paneId: null,
-      cwd: null,
-      pi: {},
-    });
-  }
+  const file = transcriptPath(join(brainRoot(), "conversation-fixture"));
+  mkdirSync(join(file, ".."), { recursive: true });
+  writeFileSync(
+    file,
+    `${JSON.stringify({ type: "USER_INPUT", content: `<USER_REQUEST>Read the task in ${staged.taskFile}</USER_REQUEST>` })}\n`,
+  );
+
+  const source = await harness.readHandoverRecords({
+    subagentId: staged.subagentId,
+    paneId: "wSW:p1",
+    cwd: root,
+    startedAt: Date.now(),
+    staged,
+  });
+  assert.equal(source.sessionId, "conversation-fixture");
+  assert.deepEqual(
+    [...source.records].map((record) => record.kind),
+    ["user"],
+  );
+
+  await harness.teardown({
+    subagentId: staged.subagentId,
+    paneId: null,
+    cwd: null,
+    pi: {},
+  });
 });
 
 test("listModels lists what the CLI reports", async () => {

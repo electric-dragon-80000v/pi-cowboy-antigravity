@@ -527,8 +527,9 @@ function majorVersion(version) {
   return match ? Number(match[1]) : undefined;
 }
 
-const onPath = (name) =>
-  (process.env.PATH ?? "").split(delimiter).some((dir) => {
+/** Whether a program is executable from the `PATH` of the given environment. */
+export function onPath(name, env = process.env) {
+  return (env.PATH ?? "").split(delimiter).some((dir) => {
     try {
       accessSync(join(dir || ".", name), constants.X_OK);
       return true;
@@ -536,6 +537,18 @@ const onPath = (name) =>
       return false;
     }
   });
+}
+
+/**
+ * The harness's availability answer for one environment. It is a function of
+ * `env` rather than of the ambient process so the answer can be proved against
+ * a `PATH` a test owns: the machine running the tests need not have the CLI.
+ */
+export function availabilityOf(env = process.env) {
+  return onPath("agy", env)
+    ? { status: "available" }
+    : { status: "unavailable", notice: "Antigravity requires agy on PATH." };
+}
 
 /** A value as one POSIX shell word. */
 function singleQuote(value) {
@@ -607,13 +620,7 @@ export default function register(api) {
     id: "antigravity",
     displayName: "Antigravity CLI",
     agentMultiplexerKind: "agy",
-    availability: () =>
-      onPath("agy")
-        ? { status: "available" }
-        : {
-            status: "unavailable",
-            notice: "Antigravity requires agy on PATH.",
-          },
+    availability: () => availabilityOf(),
     /**
      * Stage the definition and the trust override, then prove the pane reads
      * both. The definition is what the launch names, so a pane that cannot see
