@@ -557,6 +557,44 @@ test("postStart refuses a pane with no agent surface, and a refused submit", asy
   );
 });
 
+test("prepare proves the staged state without a task file when there is none", async () => {
+  const { harness } = harnessFrom();
+  const { launch: staged } = stagedLaunch({ taskFile: null });
+  const ran = [];
+  await harness.prepare({
+    pane: silentPane({ run: async (_paneId, command) => ran.push(command) }),
+    paneId: "wSW:p1",
+    cwd: "/private/tmp/work",
+    launch: staged,
+  });
+
+  assert.doesNotMatch(ran[0], /task\.md/);
+  assert.match(ran[0], /AGY_"/);
+});
+
+test("postStart submits nothing when the launch carries no task", async () => {
+  const { harness } = harnessFrom();
+  const { launch: staged } = stagedLaunch({ taskFile: null });
+  const waited = [];
+  const prompted = [];
+  await harness.postStart({
+    pane: silentPane({
+      waitForOutput: async (_paneId, output) => waited.push(output),
+      promptAgent: async (_paneId, message) => {
+        prompted.push(message);
+        return { kind: "submitted" };
+      },
+    }),
+    paneId: "wSW:p1",
+    cwd: "/private/tmp/work",
+    launch: staged,
+    signal: new AbortController().signal,
+  });
+
+  assert.deepEqual(waited, []);
+  assert.deepEqual(prompted, []);
+});
+
 test("postStart never types into a pane the run was aborted in", async () => {
   const { harness } = harnessFrom();
   const { launch: staged } = stagedLaunch();

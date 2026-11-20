@@ -560,7 +560,10 @@ function stagedProof(launch) {
   const agentFile = agentFileOf(launch);
   return [
     `test -r ${singleQuote(agentFile)}`,
-    `test -r ${singleQuote(launch.taskFile)}`,
+    // A launch with no task staged no task file to check.
+    ...(launch.taskFile === null
+      ? []
+      : [`test -r ${singleQuote(launch.taskFile)}`]),
     `test -r ${singleQuote(settingsFileOf(launch))}`,
     "command -v agy >/dev/null",
     // Broken with `""` so only the shell's evaluation produces the token, not
@@ -644,11 +647,15 @@ export default function register(api) {
       stagedDirs.set(launch.subagentId, stagingDirectoryOf(launch));
 
       await pane.run(paneId, stagedProof(launch));
+      const staged =
+        launch.taskFile === null
+          ? `the agent definition ${agentFile}`
+          : `the agent definition ${agentFile}, the task ${launch.taskFile}`;
       try {
         await pane.waitForOutput(paneId, stagedMarker, 15_000);
       } catch {
         throw new Error(
-          `failed to prepare the pane: the pane never proved it can see the staged Antigravity state — the agent definition ${agentFile}, the task ${launch.taskFile}, the settings ${settingsFileOf(launch)}, or the agy binary on its PATH. The agent did not start.`,
+          `failed to prepare the pane: the pane never proved it can see the staged Antigravity state — ${staged}, the settings ${settingsFileOf(launch)}, or the agy binary on its PATH. The agent did not start.`,
         );
       }
     },
@@ -659,6 +666,9 @@ export default function register(api) {
      * an unverified pane.
      */
     postStart: async ({ pane, paneId, launch, signal }) => {
+      // An empty-prompt spawn has no task to submit: the TUI opens idle and the
+      // human types the first turn.
+      if (launch.taskFile === null) return;
       if (!pane.promptAgent) {
         throw new Error(
           "This multiplexer cannot submit a task into the Antigravity pane; the agent did not receive its task.",
